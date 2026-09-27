@@ -1,0 +1,93 @@
+name: Build MT7601U for Lancelot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git bc bison flex build-essential \
+            clang lld llvm libssl-dev \
+            libelf-dev cpio rsync python3
+
+      - name: Clone Proton kernel source
+        run: |
+          git clone --depth=1 \
+            -b kernel-tree \
+            https://github.com/Jbub5/android_kernel_xiaomi_mt6768.git \
+            kernel
+
+      - name: Check kernel source
+        working-directory: kernel
+        run: |
+          echo "=== Kernel version ==="
+          make kernelversion
+          echo "=== Source commit ==="
+          git rev-parse HEAD
+          echo "=== MT7601U source ==="
+          test -d drivers/net/wireless/mediatek/mt7601u
+          echo "MT7601U source ditemukan"
+
+      - name: Prepare configuration
+        working-directory: kernel
+        run: |
+          make ARCH=arm64 lancelot_defconfig
+
+          ./scripts/config --enable CONFIG_USB
+          ./scripts/config --enable CONFIG_CFG80211
+          ./scripts/config --module CONFIG_MAC80211
+          ./scripts/config --module CONFIG_MT7601U
+
+          make ARCH=arm64 olddefconfig
+
+          echo "=== Final WiFi config ==="
+          grep -E \
+            'CONFIG_(USB|CFG80211|MAC80211|MT7601U)=' \
+            .config
+
+      - name: Build MT7601U
+        working-directory: kernel
+        run: |
+          make -j"$(nproc)" \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            M=drivers/net/wireless/mediatek/mt7601u \
+            modules
+
+      - name: Build MAC80211
+        working-directory: kernel
+        run: |
+          make -j"$(nproc)" \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            M=net/mac80211 \
+            modules
+
+      - name: Collect modules
+        run: |
+          mkdir -p output
+
+          find kernel/drivers/net/wireless/mediatek/mt7601u \
+            -name '*.ko' -exec cp {} output/ \;
+
+          find kernel/net/mac80211 \
+            -name '*.ko' -exec cp {} output/ \;
+
+          echo "=== Modules hasil build ==="
+          ls -lh output/
+
+          test -n "$(find output -name '*.ko')"
+
+      - name: Upload modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: lancelot-mt7601u-modules
+          path: output/
